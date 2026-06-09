@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ds4linux</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1>ds4linux</h1>
+          <p id="daemonState">Daemon: checking</p>
+        </div>
+        <div class="actions">
+          <button id="applyProfile" class="primary" type="button">Apply</button>
+          <button id="restartService" type="button">Restart</button>
+          <button id="enableService" type="button">Enable boot</button>
+          <button id="stopService" type="button">Stop</button>
+        </div>
+      </header>
+
+      <section class="layout">
+        <aside class="left">
+          <section class="panel">
+            <h2>Controller</h2>
+            <label class="field">
+              <span>Device</span>
+              <select id="deviceSelect"></select>
+            </label>
+            <dl class="meta">
+              <div><dt>Physical</dt><dd id="physicalPath">-</dd></div>
+              <div><dt>Virtual</dt><dd id="virtualPath">-</dd></div>
+              <div><dt>HID raw</dt><dd id="hidrawPath">-</dd></div>
+              <div><dt>usb_oc</dt><dd id="usbOcValue">-</dd></div>
+            </dl>
+          </section>
+
+          <section class="panel">
+            <h2>General</h2>
+            <label class="toggle"><input id="enabled" type="checkbox" /> <span>Enabled</span></label>
+            <label class="toggle"><input id="hidePhysical" type="checkbox" /> <span>Hide physical controller</span></label>
+
+            <label class="field">
+              <span>Polling</span>
+              <select id="polling">
+                <option value="4">1000 Hz / 1 ms</option>
+                <option value="5">500 Hz / 2 ms</option>
+                <option value="6">250 Hz / 4 ms</option>
+                <option value="3">2000 Hz / 0.5 ms</option>
+              </select>
+            </label>
+          </section>
+
+          <section class="panel stick-editor" data-stick="left">
+            <h2>Left Stick</h2>
+            <label class="field">
+              <span>Deadzone type</span>
+              <select id="leftShape">
+                <option value="radial">Radial</option>
+                <option value="axial">Axial</option>
+              </select>
+            </label>
+            <label class="toggle"><input id="leftSquare" type="checkbox" /> <span>Square output</span></label>
+            <div class="number-range">
+              <label class="range">
+                <span>Deadzone</span>
+                <input id="leftDeadzone" type="range" min="0" max="0.30" step="0.001" />
+              </label>
+              <input id="leftDeadzoneNumber" class="number" type="number" min="0" max="0.99" step="0.001" />
+            </div>
+            <div class="number-range">
+              <label class="range">
+                <span>Anti-deadzone</span>
+                <input id="leftAntiDeadzone" type="range" min="0" max="0.30" step="0.001" />
+              </label>
+              <input id="leftAntiDeadzoneNumber" class="number" type="number" min="0" max="1" step="0.001" />
+            </div>
+          </section>
+
+          <section class="panel stick-editor" data-stick="right">
+            <h2>Right Stick</h2>
+            <label class="field">
+              <span>Deadzone type</span>
+              <select id="rightShape">
+                <option value="radial">Radial</option>
+                <option value="axial">Axial</option>
+              </select>
+            </label>
+            <label class="toggle"><input id="rightSquare" type="checkbox" /> <span>Square output</span></label>
+            <div class="number-range">
+              <label class="range">
+                <span>Deadzone</span>
+                <input id="rightDeadzone" type="range" min="0" max="0.30" step="0.001" />
+              </label>
+              <input id="rightDeadzoneNumber" class="number" type="number" min="0" max="0.99" step="0.001" />
+            </div>
+            <div class="number-range">
+              <label class="range">
+                <span>Anti-deadzone</span>
+                <input id="rightAntiDeadzone" type="range" min="0" max="0.30" step="0.001" />
+              </label>
+              <input id="rightAntiDeadzoneNumber" class="number" type="number" min="0" max="1" step="0.001" />
+            </div>
+          </section>
+        </aside>
+
+        <section class="right">
+          <section class="metrics">
+            <div>
+              <span>Requested polling</span>
+              <strong id="configuredRate">-</strong>
+            </div>
+            <div>
+              <span>Real HID rate</span>
+              <strong id="hidrawRate">0 Hz</strong>
+            </div>
+            <div>
+              <span>Output rate</span>
+              <strong id="outputRate">0 Hz</strong>
+            </div>
+            <div>
+              <span>Hidden</span>
+              <strong id="hiddenState">no</strong>
+            </div>
+            <div>
+              <span>Status</span>
+              <strong id="runningState">idle</strong>
+            </div>
+          </section>
+
+          <section class="scope">
+            <div class="scope-grid">
+              <section class="stick-scope">
+                <h2>Left Stick</h2>
+                <canvas id="leftCanvas" width="440" height="440"></canvas>
+                <pre id="leftValues"></pre>
+              </section>
+              <section class="stick-scope">
+                <h2>Right Stick</h2>
+                <canvas id="rightCanvas" width="440" height="440"></canvas>
+                <pre id="rightValues"></pre>
+              </section>
+            </div>
+          </section>
+
+          <section class="logline" id="lastError"></section>
+        </section>
+      </section>
+    </main>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

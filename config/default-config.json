@@ -1,0 +1,23 @@
+{
+  "socket_path": "/run/ds4linux/ds4linux.sock",
+  "target_user": "",
+  "socket_group": "",
+  "profile": {
+    "enabled": true,
+    "selected_device_path": null,
+    "left_stick": {
+      "deadzone": 0.08,
+      "anti_deadzone": 0.08,
+      "deadzone_shape": "radial",
+      "square": true
+    },
+    "right_stick": {
+      "deadzone": 0.08,
+      "anti_deadzone": 0.08,
+      "deadzone_shape": "radial",
+      "square": false
+    },
+    "hide_physical": true,
+    "polling_binterval": 4
+  }
+}
