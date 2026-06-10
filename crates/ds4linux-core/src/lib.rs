@@ -51,6 +51,7 @@ pub struct Profile {
     pub left_stick: StickProfile,
     pub right_stick: StickProfile,
     pub hide_physical: bool,
+    pub disable_controller_audio: bool,
     pub polling_binterval: u8,
 }
 
@@ -65,6 +66,7 @@ impl Default for Profile {
             },
             right_stick: StickProfile::default(),
             hide_physical: true,
+            disable_controller_audio: false,
             polling_binterval: 4,
         }
     }
@@ -89,6 +91,7 @@ pub struct ProfilePatch {
     pub left_stick: Option<StickProfile>,
     pub right_stick: Option<StickProfile>,
     pub hide_physical: Option<bool>,
+    pub disable_controller_audio: Option<bool>,
     pub polling_binterval: Option<u8>,
 }
 
@@ -108,6 +111,9 @@ impl ProfilePatch {
         }
         if let Some(value) = self.hide_physical {
             profile.hide_physical = value;
+        }
+        if let Some(value) = self.disable_controller_audio {
+            profile.disable_controller_audio = value;
         }
         if let Some(value) = self.polling_binterval {
             profile.polling_binterval = value;
@@ -147,6 +153,7 @@ pub struct Metrics {
     pub usb_oc_loaded: bool,
     pub usb_oc_persistent: bool,
     pub physical_hidden: bool,
+    pub controller_audio_disabled: bool,
     pub running: bool,
 }
 

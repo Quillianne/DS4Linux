@@ -7,8 +7,10 @@ const el = {
   virtualPath: document.querySelector("#virtualPath"),
   hidrawPath: document.querySelector("#hidrawPath"),
   usbOcValue: document.querySelector("#usbOcValue"),
+  audioState: document.querySelector("#audioState"),
   enabled: document.querySelector("#enabled"),
   hidePhysical: document.querySelector("#hidePhysical"),
+  disableControllerAudio: document.querySelector("#disableControllerAudio"),
   polling: document.querySelector("#polling"),
   leftShape: document.querySelector("#leftShape"),
   leftSquare: document.querySelector("#leftSquare"),
@@ -53,6 +55,7 @@ const DEFAULT_PROFILE = {
   left_stick: { ...DEFAULT_STICK, square: true },
   right_stick: { ...DEFAULT_STICK },
   hide_physical: true,
+  disable_controller_audio: false,
   polling_binterval: 4
 };
 
@@ -80,6 +83,7 @@ function normalizeProfile(profile) {
     left_stick: normalizeStick(profile?.left_stick, DEFAULT_PROFILE.left_stick),
     right_stick: normalizeStick(profile?.right_stick, DEFAULT_PROFILE.right_stick),
     hide_physical: Boolean(profile?.hide_physical ?? DEFAULT_PROFILE.hide_physical),
+    disable_controller_audio: Boolean(profile?.disable_controller_audio ?? DEFAULT_PROFILE.disable_controller_audio),
     polling_binterval: Number(profile?.polling_binterval ?? DEFAULT_PROFILE.polling_binterval)
   };
 }
@@ -156,6 +160,7 @@ function syncFormFromProfile(profile) {
   el.deviceSelect.value = profile.selected_device_path || currentStatus?.metrics?.physical_path || "";
   el.enabled.checked = profile.enabled;
   el.hidePhysical.checked = profile.hide_physical;
+  el.disableControllerAudio.checked = profile.disable_controller_audio;
   el.polling.value = profile.polling_binterval;
   setStickControls("left", profile.left_stick);
   setStickControls("right", profile.right_stick);
@@ -168,6 +173,7 @@ function readDraftFromForm() {
     left_stick: readStickControls("left"),
     right_stick: readStickControls("right"),
     hide_physical: el.hidePhysical.checked,
+    disable_controller_audio: el.disableControllerAudio.checked,
     polling_binterval: Number(el.polling.value)
   };
 }
@@ -305,6 +311,7 @@ function render(status) {
   el.virtualPath.textContent = metrics.virtual_path || "-";
   el.hidrawPath.textContent = metrics.hidraw_path || "-";
   el.usbOcValue.textContent = fmtUsbOc(metrics);
+  el.audioState.textContent = metrics.controller_audio_disabled ? "disabled" : "enabled";
   el.configuredRate.textContent = fmtPolling(metrics.configured_polling_hz, metrics.configured_polling_ms);
   el.hidrawRate.textContent = fmtHz(metrics.hidraw_hz);
   el.outputRate.textContent = fmtHz(metrics.output_hz);
@@ -390,6 +397,7 @@ function bindControls() {
     el.deviceSelect,
     el.enabled,
     el.hidePhysical,
+    el.disableControllerAudio,
     el.polling,
     el.leftShape,
     el.leftSquare,

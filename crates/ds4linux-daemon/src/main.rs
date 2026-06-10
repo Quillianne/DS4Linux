@@ -29,6 +29,7 @@ use tracing::{error, info, warn};
 
 const CONFIG_PATH: &str = "/etc/ds4linux/config.json";
 const HIDE_RULE_PATH: &str = "/etc/udev/rules.d/99-ds4linux-hide-physical.rules";
+const AUDIO_RULE_PATH: &str = "/etc/udev/rules.d/99-ds4linux-disable-controller-audio.rules";
 const USB_OC_MODULES_LOAD_PATH: &str = "/etc/modules-load.d/usb_oc.conf";
 const USB_OC_MODPROBE_PATH: &str = "/etc/modprobe.d/usb_oc.conf";
 const SOCKET_GROUP: &str = "users";
@@ -254,12 +255,18 @@ fn handle_request(
             };
             apply_polling_for_device(&profile, selected.as_ref())?;
             apply_hide_for_device(profile.hide_physical, selected.as_ref(), &target_user)?;
+            apply_controller_audio_disable(
+                profile.disable_controller_audio,
+                selected.as_ref(),
+                &target_user,
+            )?;
             Ok(DaemonResponse::Ok)
         }
         DaemonRequest::PatchProfile { patch } => {
-            let (old_hide, old_polling, old_path, profile, selected, target_user) = {
+            let (old_hide, old_audio, old_polling, old_path, profile, selected, target_user) = {
                 let mut state = state.lock().unwrap();
                 let old_hide = state.config.profile.hide_physical;
+                let old_audio = state.config.profile.disable_controller_audio;
                 let old_polling = state.config.profile.polling_binterval;
                 let old_path = state.config.profile.selected_device_path.clone();
                 patch.apply_to(&mut state.config.profile);
@@ -269,6 +276,7 @@ fn handle_request(
                 save_config(&state.config)?;
                 (
                     old_hide,
+                    old_audio,
                     old_polling,
                     old_path,
                     profile,
@@ -282,6 +290,15 @@ fn handle_request(
             }
             if old_hide != profile.hide_physical || old_path != profile.selected_device_path {
                 apply_hide_for_device(profile.hide_physical, selected.as_ref(), &target_user)?;
+            }
+            if old_audio != profile.disable_controller_audio
+                || old_path != profile.selected_device_path
+            {
+                apply_controller_audio_disable(
+                    profile.disable_controller_audio,
+                    selected.as_ref(),
+                    &target_user,
+                )?;
             }
             Ok(DaemonResponse::Ok)
         }
@@ -353,7 +370,7 @@ fn remapper_loop(app: App) -> Result<()> {
     let mut output_count = 0u32;
     let mut last_rate_tick = Instant::now();
     let mut last_status_publish = Instant::now() - Duration::from_millis(50);
-    let mut pending_events: Vec<InputEvent> = Vec::new();
+    let mut pending_events: Vec<InputEvent> = Vec::with_capacity(16);
 
     loop {
         if app.stop.load(Ordering::Relaxed) {
@@ -399,6 +416,13 @@ fn remapper_loop(app: App) -> Result<()> {
                         ) {
                             warn!("apply physical hide setting failed: {err:#}");
                         }
+                        if let Err(err) = apply_controller_audio_disable(
+                            profile.disable_controller_audio,
+                            selected.as_ref(),
+                            &target_user,
+                        ) {
+                            warn!("apply controller audio setting failed: {err:#}");
+                        }
                         let hidraw_path = selected.as_ref().and_then(find_hidraw_for_device);
                         device = Some(opened);
                         if let Ok(mut state) = app.state.try_lock() {
@@ -406,6 +430,8 @@ fn remapper_loop(app: App) -> Result<()> {
                             state.metrics.hidraw_path = hidraw_path;
                             state.metrics.virtual_path = virtual_path.clone();
                             state.metrics.physical_hidden = profile.hide_physical;
+                            state.metrics.controller_audio_disabled =
+                                profile.disable_controller_audio;
                             state.metrics.last_error = None;
                         }
                     }
@@ -433,13 +459,14 @@ fn remapper_loop(app: App) -> Result<()> {
                     for event in events {
                         match event.destructure() {
                             EventSummary::AbsoluteAxis(_, axis, value) => {
-                                pending_events.extend(update_axis(
+                                update_axis(
                                     axis,
                                     value,
                                     &mut raw,
                                     &mut output,
                                     &profile,
-                                ));
+                                    &mut pending_events,
+                                );
                             }
                             EventSummary::Key(_, key, value) => {
                                 if is_gamepad_button(key) {
@@ -518,6 +545,7 @@ fn remapper_loop(app: App) -> Result<()> {
                 state.output = output;
                 state.metrics.virtual_path = virtual_path.clone();
                 state.metrics.physical_hidden = profile.hide_physical;
+                state.metrics.controller_audio_disabled = profile.disable_controller_audio;
             }
             last_status_publish = Instant::now();
         }
@@ -696,46 +724,64 @@ fn update_axis(
     raw: &mut ControllerSample,
     output: &mut ControllerSample,
     profile: &Profile,
-) -> Vec<InputEvent> {
+    pending_events: &mut Vec<InputEvent>,
+) {
     match axis {
-        AbsoluteAxisCode::ABS_X => raw.left.x = value,
-        AbsoluteAxisCode::ABS_Y => raw.left.y = value,
-        AbsoluteAxisCode::ABS_RX => raw.right.x = value,
-        AbsoluteAxisCode::ABS_RY => raw.right.y = value,
-        AbsoluteAxisCode::ABS_Z => raw.l2 = value.clamp(0, 255),
-        AbsoluteAxisCode::ABS_RZ => raw.r2 = value.clamp(0, 255),
-        AbsoluteAxisCode::ABS_HAT0X => raw.hat_x = value.clamp(-1, 1),
-        AbsoluteAxisCode::ABS_HAT0Y => raw.hat_y = value.clamp(-1, 1),
-        _ => return Vec::new(),
-    }
-
-    let left = transform_left_stick(raw.left, profile);
-    let right = transform_right_stick(raw.right, profile);
-    output.left = left;
-    output.right = right;
-    output.l2 = raw.l2;
-    output.r2 = raw.r2;
-    output.hat_x = raw.hat_x;
-    output.hat_y = raw.hat_y;
-
-    match axis {
-        AbsoluteAxisCode::ABS_X | AbsoluteAxisCode::ABS_Y => vec![
-            abs_event(AbsoluteAxisCode::ABS_X, stick_axis_for_xbox(left.x)),
-            abs_event(AbsoluteAxisCode::ABS_Y, stick_axis_for_xbox(left.y)),
-        ],
-        AbsoluteAxisCode::ABS_RX => vec![abs_event(
-            AbsoluteAxisCode::ABS_RX,
-            stick_axis_for_xbox(right.x),
-        )],
-        AbsoluteAxisCode::ABS_RY => vec![abs_event(
-            AbsoluteAxisCode::ABS_RY,
-            stick_axis_for_xbox(right.y),
-        )],
-        AbsoluteAxisCode::ABS_Z => vec![abs_event(AbsoluteAxisCode::ABS_Z, raw.l2)],
-        AbsoluteAxisCode::ABS_RZ => vec![abs_event(AbsoluteAxisCode::ABS_RZ, raw.r2)],
-        AbsoluteAxisCode::ABS_HAT0X => vec![abs_event(AbsoluteAxisCode::ABS_HAT0X, raw.hat_x)],
-        AbsoluteAxisCode::ABS_HAT0Y => vec![abs_event(AbsoluteAxisCode::ABS_HAT0Y, raw.hat_y)],
-        _ => Vec::new(),
+        AbsoluteAxisCode::ABS_X | AbsoluteAxisCode::ABS_Y => {
+            if axis == AbsoluteAxisCode::ABS_X {
+                raw.left.x = value;
+            } else {
+                raw.left.y = value;
+            }
+            let left = transform_left_stick(raw.left, profile);
+            output.left = left;
+            pending_events.push(abs_event(
+                AbsoluteAxisCode::ABS_X,
+                stick_axis_for_xbox(left.x),
+            ));
+            pending_events.push(abs_event(
+                AbsoluteAxisCode::ABS_Y,
+                stick_axis_for_xbox(left.y),
+            ));
+        }
+        AbsoluteAxisCode::ABS_RX | AbsoluteAxisCode::ABS_RY => {
+            if axis == AbsoluteAxisCode::ABS_RX {
+                raw.right.x = value;
+            } else {
+                raw.right.y = value;
+            }
+            let right = transform_right_stick(raw.right, profile);
+            output.right = right;
+            pending_events.push(abs_event(
+                AbsoluteAxisCode::ABS_RX,
+                stick_axis_for_xbox(right.x),
+            ));
+            pending_events.push(abs_event(
+                AbsoluteAxisCode::ABS_RY,
+                stick_axis_for_xbox(right.y),
+            ));
+        }
+        AbsoluteAxisCode::ABS_Z => {
+            raw.l2 = value.clamp(0, 255);
+            output.l2 = raw.l2;
+            pending_events.push(abs_event(AbsoluteAxisCode::ABS_Z, output.l2));
+        }
+        AbsoluteAxisCode::ABS_RZ => {
+            raw.r2 = value.clamp(0, 255);
+            output.r2 = raw.r2;
+            pending_events.push(abs_event(AbsoluteAxisCode::ABS_RZ, output.r2));
+        }
+        AbsoluteAxisCode::ABS_HAT0X => {
+            raw.hat_x = value.clamp(-1, 1);
+            output.hat_x = raw.hat_x;
+            pending_events.push(abs_event(AbsoluteAxisCode::ABS_HAT0X, output.hat_x));
+        }
+        AbsoluteAxisCode::ABS_HAT0Y => {
+            raw.hat_y = value.clamp(-1, 1);
+            output.hat_y = raw.hat_y;
+            pending_events.push(abs_event(AbsoluteAxisCode::ABS_HAT0Y, output.hat_y));
+        }
+        _ => {}
     }
 }
 
@@ -959,6 +1005,87 @@ fn apply_hide_for_device(
     Ok(())
 }
 
+fn apply_controller_audio_disable(
+    enabled: bool,
+    selected: Option<&InputDeviceInfo>,
+    target_user: &str,
+) -> Result<()> {
+    if !enabled {
+        let vid = selected
+            .and_then(|device| device.vendor_id.as_deref())
+            .unwrap_or(DUALSENSE_VID);
+        let pid = selected
+            .and_then(|device| device.product_id.as_deref())
+            .unwrap_or(DUALSENSE_PID);
+        let _ = fs::remove_file(AUDIO_RULE_PATH);
+        set_usb_audio_interfaces_authorized(vid, pid, true)?;
+        reload_sound_udev()?;
+        restore_audio_access_for_vid_pid(vid, pid, target_user)?;
+        return Ok(());
+    }
+
+    let selected = selected.ok_or_else(|| anyhow!("no selected physical controller for audio"))?;
+    let vid = selected.vendor_id.as_deref().unwrap_or(DUALSENSE_VID);
+    let pid = selected.product_id.as_deref().unwrap_or(DUALSENSE_PID);
+    let rules = format!(
+        "ACTION==\"add|change\", SUBSYSTEM==\"usb\", DEVTYPE==\"usb_interface\", ATTR{{bInterfaceClass}}==\"01\", ATTRS{{idVendor}}==\"{vid}\", ATTRS{{idProduct}}==\"{pid}\", ATTR{{authorized}}=\"0\"\n\
+         ACTION==\"add|change\", SUBSYSTEM==\"sound\", KERNEL==\"card*\", ATTRS{{idVendor}}==\"{vid}\", ATTRS{{idProduct}}==\"{pid}\", ENV{{ACP_IGNORE}}=\"1\", ENV{{PULSE_IGNORE}}=\"1\"\n\
+         ACTION==\"add|change\", SUBSYSTEM==\"sound\", KERNEL==\"controlC*|pcmC*\", ATTRS{{idVendor}}==\"{vid}\", ATTRS{{idProduct}}==\"{pid}\", ENV{{ACP_IGNORE}}=\"1\", ENV{{PULSE_IGNORE}}=\"1\", TAG-=\"uaccess\", MODE=\"0000\"\n"
+    );
+    fs::write(AUDIO_RULE_PATH, rules).with_context(|| format!("write {AUDIO_RULE_PATH}"))?;
+    set_usb_audio_interfaces_authorized(vid, pid, false)?;
+    reload_sound_udev()?;
+    strip_audio_access_for_vid_pid(vid, pid, target_user)?;
+    Ok(())
+}
+
+fn reload_sound_udev() -> Result<()> {
+    run("udevadm", &["control", "--reload"])?;
+    let _ = Command::new("udevadm")
+        .args(["trigger", "--action=change", "--subsystem-match=sound"])
+        .status();
+    let _ = Command::new("udevadm").arg("settle").status();
+    Ok(())
+}
+
+fn set_usb_audio_interfaces_authorized(vid: &str, pid: &str, authorized: bool) -> Result<()> {
+    let value = if authorized { "1" } else { "0" };
+    for path in usb_audio_interface_paths_for_vid_pid(vid, pid)? {
+        let authorized_path = path.join("authorized");
+        if authorized_path.exists() {
+            fs::write(&authorized_path, value)
+                .with_context(|| format!("write {}", authorized_path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+fn usb_audio_interface_paths_for_vid_pid(vid: &str, pid: &str) -> Result<Vec<PathBuf>> {
+    let mut interfaces = Vec::new();
+    let dir = Path::new("/sys/bus/usb/devices");
+    for entry in fs::read_dir(dir).with_context(|| format!("read {}", dir.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Some((device_name, _interface)) = name.split_once(':') else {
+            continue;
+        };
+        if read_trimmed(path.join("bInterfaceClass")).as_deref() != Some("01") {
+            continue;
+        }
+        let device_path = dir.join(device_name);
+        if read_trimmed(device_path.join("idVendor")).as_deref() == Some(vid)
+            && read_trimmed(device_path.join("idProduct")).as_deref() == Some(pid)
+        {
+            interfaces.push(path);
+        }
+    }
+    interfaces.sort();
+    Ok(interfaces)
+}
+
 fn restore_user_access_for_vid_pid(vid: &str, pid: &str, target_user: &str) -> Result<()> {
     for pattern in ["/dev/input", "/dev"] {
         let dir = Path::new(pattern);
@@ -986,6 +1113,21 @@ fn restore_user_access_for_vid_pid(vid: &str, pid: &str, target_user: &str) -> R
                     .status();
             }
         }
+    }
+    Ok(())
+}
+
+fn restore_audio_access_for_vid_pid(vid: &str, pid: &str, target_user: &str) -> Result<()> {
+    for path in sound_device_nodes_for_vid_pid(vid, pid)? {
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o660));
+        let _ = Command::new("setfacl")
+            .args(["-m", &format!("u:{target_user}:rw")])
+            .arg(&path)
+            .status();
+        let _ = Command::new("setfacl")
+            .args(["-m", "g::rw-,m::rw-"])
+            .arg(&path)
+            .status();
     }
     Ok(())
 }
@@ -1021,6 +1163,73 @@ fn strip_user_access_for_vid_pid(vid: &str, pid: &str, target_user: &str) -> Res
     Ok(())
 }
 
+fn strip_audio_access_for_vid_pid(vid: &str, pid: &str, target_user: &str) -> Result<()> {
+    for path in sound_device_nodes_for_vid_pid(vid, pid)? {
+        let _ = Command::new("setfacl")
+            .args(["-x", &format!("u:{target_user}")])
+            .arg(&path)
+            .status();
+        let _ = Command::new("setfacl")
+            .args(["-m", "g::---,m::---"])
+            .arg(&path)
+            .status();
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o000));
+    }
+    Ok(())
+}
+
+fn sound_device_nodes_for_vid_pid(vid: &str, pid: &str) -> Result<Vec<PathBuf>> {
+    let cards = sound_cards_for_vid_pid(vid, pid)?;
+    if cards.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut nodes = Vec::new();
+    let dir = Path::new("/dev/snd");
+    for entry in fs::read_dir(dir).with_context(|| format!("read {}", dir.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if cards.iter().any(|card| {
+            name == format!("controlC{card}") || name.starts_with(&format!("pcmC{card}D"))
+        }) {
+            nodes.push(path);
+        }
+    }
+    nodes.sort();
+    Ok(nodes)
+}
+
+fn sound_cards_for_vid_pid(vid: &str, pid: &str) -> Result<Vec<String>> {
+    let mut cards = Vec::new();
+    let dir = Path::new("/sys/class/sound");
+    for entry in fs::read_dir(dir).with_context(|| format!("read {}", dir.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Some(card) = name.strip_prefix("card") else {
+            continue;
+        };
+        if card.is_empty() || card.chars().any(|ch| !ch.is_ascii_digit()) {
+            continue;
+        }
+        let Some(props) = sysfs_node_props(&path) else {
+            continue;
+        };
+        if has_prop(&props, "ID_VENDOR_ID", vid) && has_prop(&props, "ID_MODEL_ID", pid)
+            || has_prop(&props, "ID_USB_VENDOR_ID", vid) && has_prop(&props, "ID_USB_MODEL_ID", pid)
+        {
+            cards.push(card.to_string());
+        }
+    }
+    cards.sort();
+    Ok(cards)
+}
+
 fn device_node_matches(path: &Path, vid: &str, pid: &str) -> bool {
     let Some(props) = device_node_props(path) else {
         return false;
@@ -1036,6 +1245,21 @@ fn device_node_props(path: &Path) -> Option<String> {
         .output()
         .ok()?;
     Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn sysfs_node_props(path: &Path) -> Option<String> {
+    let output = Command::new("udevadm")
+        .args(["info", "-q", "property", "-p"])
+        .arg(path)
+        .output()
+        .ok()?;
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn read_trimmed(path: PathBuf) -> Option<String> {
+    fs::read_to_string(path)
+        .ok()
+        .map(|value| value.trim().to_string())
 }
 
 fn has_prop(props: &str, key: &str, value: &str) -> bool {

@@ -5,6 +5,9 @@ After=systemd-udevd.service
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/ds4linuxd
+CPUSchedulingPolicy=rr
+CPUSchedulingPriority=20
+Nice=-10
 Restart=on-failure
 RestartSec=1
 

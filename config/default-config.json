@@ -18,6 +18,7 @@
       "square": false
     },
     "hide_physical": true,
+    "disable_controller_audio": false,
     "polling_binterval": 4
   }
 }

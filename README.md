@@ -12,6 +12,7 @@ Current scope:
 - per-stick radial or axial deadzone type
 - per-stick optional square output, applied separately after deadzone processing
 - optional physical-controller hide through udev/ACL
+- optional controller microphone/speaker disable through udev/ALSA permissions
 - polling override through `usb_oc`
 - combined input/output stick scope with deadzone overlay
 - configured polling, HID raw rate, and output rate display
@@ -75,6 +76,25 @@ The script writes:
 
 The UI shows whether `usb_oc` is loaded, whether the persistent config is
 present, and the current `interrupt_interval_override` value.
+
+Controller audio disable:
+
+Some PlayStation controllers expose an USB audio card for the built-in
+microphone and speaker/headset path. ds4linux can disable that audio device at
+the system level for the selected controller. This is separate from hiding the
+physical controller input.
+
+When enabled, ds4linux writes a udev rule under:
+
+```text
+/etc/udev/rules.d/99-ds4linux-disable-controller-audio.rules
+```
+
+The rule disables the matching USB audio interface (`bInterfaceClass=01`), marks
+the matching ALSA card with `ACP_IGNORE=1` for PipeWire, and removes user access
+from the matching `/dev/snd/controlC*` and `/dev/snd/pcmC*` nodes as a fallback.
+Existing audio sessions may need the controller to be replugged, or the audio
+service/game restarted, before already-created audio routes disappear.
 
 Run the UI:
 
